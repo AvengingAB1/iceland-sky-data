@@ -1,0 +1,64 @@
+name: HARMONIE cloud + wind/precip data feed
+
+# PUBLIC DATA FEED for the Sunsetglow app. Downloads the latest vedur HARMONIE
+# cloud PNGs + thattaspa wind/precip GIFs, extracts low/mid/high cloud grids and
+# wind/precip band grids, and publishes harmonie_latest.json + elements_latest.json
+# to GitHub Pages — free, no server. The APP itself lives in a separate PRIVATE
+# repo and is shipped as an APK; only DATA is published here.
+
+on:
+  schedule:
+    # vedur runs HARMONIE every 3 h (00/03/.../21 UTC) and publishes each ~2h10
+    # later, so fire ~2h45 after each cycle to reliably catch the fresh run.
+    - cron: '45 2,5,8,11,14,17,20,23 * * *'
+  workflow_dispatch:        # lets you run it manually from the Actions tab
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r harmonie/requirements.txt
+
+      - name: Extract HARMONIE cloud grids
+        run: |
+          mkdir -p _site
+          python harmonie/extract.py --out _site/harmonie_latest.json
+          touch _site/.nojekyll
+          ls -lh _site
+
+      - name: Extract wind/precip (thattaspa) grids
+        # Display-only overlays. Don't fail the whole deploy if vedur's thattaspa
+        # images are briefly unavailable — the cloud JSON above is the priority.
+        continue-on-error: true
+        run: |
+          python harmonie/extract_elements.py --out _site/elements_latest.json
+          ls -lh _site
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - id: deployment
+        uses: actions/deploy-pages@v4
