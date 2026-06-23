@@ -57,7 +57,8 @@ jobs:
           ls -lh _site
 
       - name: Extract Vedur station forecasts
-        run: python harmonie/extract_stations.py --out web/data/vedur_stations.json
+        run: python harmonie/extract_stations.py --out _site/vedur_stations.json
+          ls -lh _site
 
       - uses: actions/upload-pages-artifact@v3
         with:
