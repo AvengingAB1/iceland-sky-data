@@ -1,10 +1,8 @@
-name: HARMONIE cloud + wind/precip data feed
+name: HARMONIE cloud + wind/precip extract
 
-# PUBLIC DATA FEED for the Sunsetglow app. Downloads the latest vedur HARMONIE
-# cloud PNGs + thattaspa wind/precip GIFs, extracts low/mid/high cloud grids and
-# wind/precip band grids, and publishes harmonie_latest.json + elements_latest.json
-# to GitHub Pages — free, no server. The APP itself lives in a separate PRIVATE
-# repo and is shipped as an APK; only DATA is published here.
+# Downloads the latest vedur HARMONIE cloud PNGs + thattaspa wind/precip GIFs,
+# extracts low/mid/high cloud grids and wind/precip band grids, and publishes
+# harmonie_latest.json + elements_latest.json to GitHub Pages — free, no server.
 
 on:
   schedule:
@@ -22,6 +20,11 @@ concurrency:
   group: pages
   cancel-in-progress: true
 
+# Force all JavaScript actions to run on Node 24, so the runner stops warning about
+# the deprecated Node 20. checkout@v5 / setup-python@v6 below are already Node 24, but
+# deploy-pages@v4 and the upload-artifact@v4 pulled in by upload-pages-artifact@v3 have
+# no Node-24 major yet — this flag covers them. GitHub makes Node 24 the default on
+# 2026-06-16; opting in now just silences the warnings with no behaviour change.
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
@@ -55,6 +58,15 @@ jobs:
         run: |
           python harmonie/extract_elements.py --out _site/elements_latest.json
           ls -lh _site
+
+      - name: Extract Vedur station forecasts
+        run: python harmonie/extract_stations.py --out web/data/vedur_stations.json
+
+      # Stage the offline PWA web app next to the data. Done in Python (not inline
+      # shell) so workflow whitespace can never turn it into broken bash. See
+      # harmonie/stage_web.py.
+      - name: Stage the PWA web app alongside the data
+        run: python harmonie/stage_web.py
 
       - uses: actions/upload-pages-artifact@v3
         with:
