@@ -3,6 +3,7 @@ name: HARMONIE cloud + wind/precip data feed
 # PUBLIC DATA FEED for the Sunsetglow app. Downloads the latest vedur HARMONIE
 # cloud PNGs + thattaspa wind/precip GIFs, extracts low/mid/high cloud grids and
 # wind/precip band grids, and publishes harmonie_latest.json + elements_latest.json
+# + vedur_stations.json...
 # to GitHub Pages — free, no server. The APP itself lives in a separate PRIVATE
 # repo and is shipped as an APK; only DATA is published here.
 
