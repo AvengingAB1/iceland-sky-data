@@ -9,9 +9,12 @@ name: HARMONIE cloud + wind/precip data feed
 
 on:
   schedule:
-    # vedur runs HARMONIE every 3 h (00/03/.../21 UTC) and publishes each ~2h10
-    # later, so fire ~2h45 after each cycle to reliably catch the fresh run.
-    - cron: '45 2,5,8,11,14,17,20,23 * * *'
+    # vedur runs HARMONIE every 3 h (00/03/.../21 UTC) and publishes each ~2h10 later.
+    # Poll every 20 min so a new run is detected within ≤20 min of publication.
+    # The extract script is idempotent (re-publishes the same run if nothing new) and
+    # each run takes ~90 s → 72 runs/day × 1.5 min = ~108 min/day, well within the
+    # unlimited free-tier allowance for public repos.
+    - cron: '0,20,40 * * * *'
   workflow_dispatch:        # lets you run it manually from the Actions tab
 
 permissions:
