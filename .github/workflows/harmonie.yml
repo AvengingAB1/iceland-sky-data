@@ -1,14 +1,19 @@
-name: HARMONIE cloud + wind/precip extract
+name: HARMONIE cloud + wind/precip data feed
 
-# Downloads the latest vedur HARMONIE cloud PNGs + thattaspa wind/precip GIFs,
-# extracts low/mid/high cloud grids and wind/precip band grids, and publishes
-# harmonie_latest.json + elements_latest.json to GitHub Pages — free, no server.
+# PUBLIC DATA FEED for the Sunsetglow app. Downloads the latest vedur HARMONIE
+# cloud PNGs + thattaspa wind/precip GIFs, extracts low/mid/high cloud grids and
+# wind/precip band grids, and publishes harmonie_latest.json + elements_latest.json
+# + vedur_stations.json...
+# to GitHub Pages — free, no server. The APP itself lives in a separate PRIVATE
+# repo and is shipped as an APK; only DATA is published here.
 
 on:
   schedule:
-    # vedur runs HARMONIE every 3 h (00/03/.../21 UTC) and publishes each ~2h10
-    # later. Poll every 20 min so a new run is detected within ≤20 min of publication.
-    # Idempotent (re-publishes the same run if nothing new). ~108 free min/day.
+    # vedur runs HARMONIE every 3 h (00/03/.../21 UTC) and publishes each ~2h10 later.
+    # Poll every 20 min so a new run is detected within ≤20 min of publication.
+    # The extract script is idempotent (re-publishes the same run if nothing new) and
+    # each run takes ~90 s → 72 runs/day × 1.5 min = ~108 min/day, well within the
+    # unlimited free-tier allowance for public repos.
     - cron: '0,20,40 * * * *'
   workflow_dispatch:        # lets you run it manually from the Actions tab
 
@@ -21,11 +26,6 @@ concurrency:
   group: pages
   cancel-in-progress: true
 
-# Force all JavaScript actions to run on Node 24, so the runner stops warning about
-# the deprecated Node 20. checkout@v5 / setup-python@v6 below are already Node 24, but
-# deploy-pages@v4 and the upload-artifact@v4 pulled in by upload-pages-artifact@v3 have
-# no Node-24 major yet — this flag covers them. GitHub makes Node 24 the default on
-# 2026-06-16; opting in now just silences the warnings with no behaviour change.
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
@@ -61,13 +61,18 @@ jobs:
           ls -lh _site
 
       - name: Extract Vedur station forecasts
-        run: python harmonie/extract_stations.py --out web/data/vedur_stations.json
+        run: |
+          python harmonie/extract_stations.py --out _site/vedur_stations.json
+          ls -lh _site
 
-      # Stage the offline PWA web app next to the data. Done in Python (not inline
-      # shell) so workflow whitespace can never turn it into broken bash. See
-      # harmonie/stage_web.py.
-      - name: Stage the PWA web app alongside the data
-        run: python harmonie/stage_web.py
+      - name: Extract Open-Meteo cloud + fog grid (14-day, 22km)
+        # Server-side fetch with paced requests (12s between chunks) so the free tier
+        # per-minute limit is never hit. Covers 14 days of cloud_cover + visibility at
+        # 0.20° (~22 km). Non-blocking: HARMONIE + stations still deploy if this fails.
+        continue-on-error: true
+        run: |
+          python harmonie/extract_meteo.py --out _site/meteo_latest.json
+          ls -lh _site
 
       - uses: actions/upload-pages-artifact@v3
         with:
