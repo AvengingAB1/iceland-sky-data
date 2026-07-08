@@ -30,7 +30,7 @@ except ImportError:
 
 API = "https://api.open-meteo.com/v1/forecast"
 HOURLY = "cloud_cover_low,cloud_cover_mid,cloud_cover_high,visibility"
-CHUNK = 150          # max locations per HTTP request
+CHUNK = 75           # points per request (smaller chunks = less server compute = fewer timeouts with 14-day range)
 DELAY = 20           # seconds between chunks (stay well under 600 locs/min)
 BOX = dict(lat0=63.0, lat1=69.9, lon0=-25.2, lon1=-12.6)
 
@@ -50,7 +50,7 @@ def grid_coords(step: float):
     return lats, lons
 
 
-def fetch_chunk(lats: list, lons: list, start: str, end: str, retries: int = 2) -> list:
+def fetch_chunk(lats: list, lons: list, start: str, end: str, retries: int = 3) -> list:
     """Fetch one chunk of ≤150 locations from Open-Meteo. Returns list of point dicts."""
     params = {
         "latitude": ",".join(f"{x:.4f}" for x in lats),
@@ -61,7 +61,15 @@ def fetch_chunk(lats: list, lons: list, start: str, end: str, retries: int = 2) 
         "end_date": end,
     }
     for attempt in range(retries + 1):
-        resp = requests.get(API, params=params, timeout=60)
+        try:
+            resp = requests.get(API, params=params, timeout=120)
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+            if attempt < retries:
+                wait = 30
+                print(f" timeout/connection error, retry in {wait}s...", end="", flush=True)
+                time.sleep(wait)
+                continue
+            raise RuntimeError(f"Open-Meteo request failed after {retries} retries: {e}")
         if resp.status_code == 429:
             if attempt < retries:
                 wait = 65  # wait >1 minute for the per-minute window to reset
