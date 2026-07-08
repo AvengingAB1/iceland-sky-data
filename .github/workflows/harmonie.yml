@@ -14,7 +14,7 @@ on:
     # The extract script is idempotent (re-publishes the same run if nothing new) and
     # each run takes ~90 s → 72 runs/day × 1.5 min = ~108 min/day, well within the
     # unlimited free-tier allowance for public repos.
-    - cron: '0,20,40 * * * *'
+    - cron: '0,30 * * * *'
   workflow_dispatch:        # lets you run it manually from the Actions tab
 
 permissions:
