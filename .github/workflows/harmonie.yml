@@ -1,21 +1,13 @@
-name: HARMONIE cloud + wind/precip data feed
+name: HARMONIE cloud + wind/precip + stations data feed
 
-# PUBLIC DATA FEED for the Sunsetglow app. Downloads the latest vedur HARMONIE
-# cloud PNGs + thattaspa wind/precip GIFs, extracts low/mid/high cloud grids and
-# wind/precip band grids, and publishes harmonie_latest.json + elements_latest.json
-# + vedur_stations.json...
-# to GitHub Pages — free, no server. The APP itself lives in a separate PRIVATE
-# repo and is shipped as an APK; only DATA is published here.
+# Frequent low-latency feed: HARMONIE clouds (vedur 2.5 km), wind/precip (thattaspa),
+# and station forecasts. Runs every 30 min to catch vedur's 3h HARMONIE publications
+# within ~30 min of release. Fast (~2 min runtime), no rate-limit risk.
 
 on:
   schedule:
-    # vedur runs HARMONIE every 3 h (00/03/.../21 UTC) and publishes each ~2h10 later.
-    # Poll every 20 min so a new run is detected within ≤20 min of publication.
-    # The extract script is idempotent (re-publishes the same run if nothing new) and
-    # each run takes ~90 s → 72 runs/day × 1.5 min = ~108 min/day, well within the
-    # unlimited free-tier allowance for public repos.
     - cron: '0,30 * * * *'
-  workflow_dispatch:        # lets you run it manually from the Actions tab
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -53,8 +45,6 @@ jobs:
           ls -lh _site
 
       - name: Extract wind/precip (thattaspa) grids
-        # Display-only overlays. Don't fail the whole deploy if vedur's thattaspa
-        # images are briefly unavailable — the cloud JSON above is the priority.
         continue-on-error: true
         run: |
           python harmonie/extract_elements.py --out _site/elements_latest.json
@@ -65,14 +55,12 @@ jobs:
           python harmonie/extract_stations.py --out _site/vedur_stations.json
           ls -lh _site
 
-      - name: Extract Open-Meteo cloud + fog grid (14-day, 22km)
-        # Server-side fetch with paced requests (12s between chunks) so the free tier
-        # per-minute limit is never hit. Covers 14 days of cloud_cover + visibility at
-        # 0.20° (~22 km). Non-blocking: HARMONIE + stations still deploy if this fails.
+      # Copy the existing meteo_latest.json from the live site so it's preserved across
+      # deploys (this workflow doesn't regenerate it — the meteo workflow handles that).
+      - name: Preserve meteo_latest.json from current deploy
         continue-on-error: true
         run: |
-          python harmonie/extract_meteo.py --out _site/meteo_latest.json
-          ls -lh _site
+          curl -sf "https://avengingab1.github.io/iceland-sky-data/meteo_latest.json" -o _site/meteo_latest.json && ls -lh _site/meteo_latest.json || echo "no existing meteo_latest.json to preserve"
 
       - uses: actions/upload-pages-artifact@v3
         with:

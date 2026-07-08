@@ -1,0 +1,60 @@
+name: Open-Meteo cloud + fog grid (14-day, 22km)
+
+# Separate from the fast HARMONIE workflow. Runs every 6h (matching Open-Meteo model
+# update cadence). Takes ~12 min due to paced API requests. Own concurrency group so
+# the frequent HARMONIE deploys can't cancel it.
+
+on:
+  schedule:
+    - cron: '10 0,6,12,18 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: meteo-extract
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+jobs:
+  extract-meteo:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Extract Open-Meteo cloud + fog grid
+        run: |
+          mkdir -p _site
+          python harmonie/extract_meteo.py --out _site/meteo_latest.json
+          touch _site/.nojekyll
+          ls -lh _site
+
+      # Preserve the other data files from the live site so this deploy doesn't wipe them.
+      - name: Preserve HARMONIE + stations + elements from current deploy
+        run: |
+          curl -sf "https://avengingab1.github.io/iceland-sky-data/harmonie_latest.json" -o _site/harmonie_latest.json || true
+          curl -sf "https://avengingab1.github.io/iceland-sky-data/elements_latest.json" -o _site/elements_latest.json || true
+          curl -sf "https://avengingab1.github.io/iceland-sky-data/vedur_stations.json" -o _site/vedur_stations.json || true
+          ls -lh _site
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - id: deployment
+        uses: actions/deploy-pages@v4
