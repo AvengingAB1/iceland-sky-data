@@ -125,6 +125,47 @@ def main():
         if i + CHUNK < n_pts:
             time.sleep(DELAY)
 
+    # --- AOD (Aerosol Optical Depth) fetch from Air Quality API ---
+    AOD_API = "https://air-quality-api.open-meteo.com/v1/air-quality"
+    AOD_LATS = [63.5 + i * 1.0 for i in range(4)]   # 63.5, 64.5, 65.5, 66.5
+    AOD_LONS = [-24.0 + j * 2.0 for j in range(6)]  # -24, -22, -20, -18, -16, -14
+    aod_grid_lats = [la for la in AOD_LATS for _ in AOD_LONS]
+    aod_grid_lons = [lo for _ in AOD_LATS for lo in AOD_LONS]
+
+    print(f"\nFetching AOD ({len(aod_grid_lats)} points)...", end="", flush=True)
+    time.sleep(5)  # rate-limit courtesy delay after cloud fetch
+
+    aod_points = []
+    aod_times = []
+    try:
+        aod_params = {
+            "latitude": ",".join(f"{x:.4f}" for x in aod_grid_lats),
+            "longitude": ",".join(f"{x:.4f}" for x in aod_grid_lons),
+            "hourly": "aerosol_optical_depth",
+            "forecast_days": "5",
+            "timezone": "UTC",
+        }
+        aod_resp = requests.get(AOD_API, params=aod_params, timeout=120)
+        if aod_resp.status_code == 429:
+            raise RuntimeError("Air Quality API rate limited (429)")
+        aod_resp.raise_for_status()
+        aod_data = aod_resp.json()
+        if not isinstance(aod_data, list):
+            aod_data = [aod_data]
+        aod_times = aod_data[0].get("hourly", {}).get("time", []) if aod_data else []
+        for it in aod_data:
+            h = it.get("hourly", {})
+            aod_points.append({
+                "lat": it["latitude"],
+                "lon": it["longitude"],
+                "aod": h.get("aerosol_optical_depth", []),
+            })
+        print(f" ok ({len(aod_points)} points, {len(aod_times)} hours)")
+    except Exception as e:
+        print(f"\n  WARNING: AOD fetch failed ({e}); skipping AOD data.")
+        aod_points = []
+        aod_times = []
+
     # Build output JSON (compact: arrays of values, shared time axis)
     # All points share the same time array (same start/end), so store it once at top level.
     times = all_points[0]["time"] if all_points else []
@@ -143,6 +184,8 @@ def main():
             "low": p["low"], "mid": p["mid"], "high": p["high"],
             "visibility": p["visibility"],
         } for p in all_points],
+        "aod_times": aod_times,
+        "aod_points": aod_points,
     }
 
     # Atomic write: write to temp, rename on success
