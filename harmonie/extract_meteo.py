@@ -77,6 +77,12 @@ def fetch_chunk(lats: list, lons: list, start: str, end: str, retries: int = 3) 
                 time.sleep(wait)
                 continue
             raise RuntimeError("Open-Meteo 429 rate limit hit after retries — try later.")
+        if resp.status_code in (500, 502, 503, 504):
+            if attempt < retries:
+                wait = 30
+                print(f" {resp.status_code} server error, retry in {wait}s...", end="", flush=True)
+                time.sleep(wait)
+                continue
         resp.raise_for_status()
         break
     data = resp.json()
