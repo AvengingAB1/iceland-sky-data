@@ -1,12 +1,12 @@
 name: HARMONIE cloud + wind/precip + stations data feed
 
 # Frequent low-latency feed: HARMONIE clouds (vedur 2.5 km), wind/precip (thattaspa),
-# and station forecasts. Runs every hour to catch vedur's 3h HARMONIE publications
-# while avoiding excessive load on vedur.is (~24 hits/day instead of 48).
+# and station forecasts. Runs every hour; a lightweight probe checks if vedur has
+# published a new HARMONIE run — if not, exits without fetching or deploying.
 
 on:
   schedule:
-    - cron: '15 * * * *'
+    - cron: '20 * * * *'
   workflow_dispatch:
 
 permissions:
@@ -37,35 +37,82 @@ jobs:
       - name: Install dependencies
         run: pip install -r harmonie/requirements.txt
 
-      - name: Extract HARMONIE cloud grids
+      # Lightweight probe: check if vedur.is is reachable and has a newer HARMONIE run
+      # than what we already published. If not, skip the full extract entirely.
+      - name: Probe vedur.is for new data
+        id: probe
         run: |
           mkdir -p _site
-          python harmonie/extract.py --out _site/harmonie_latest.json
           touch _site/.nojekyll
+          # Get the run ID from our current published data (if any)
+          CURRENT_RUN=$(curl -sf "https://avengingab1.github.io/iceland-sky-data/harmonie_latest.json" | python3 -c "import sys,json; print(json.load(sys.stdin).get('run',''))" 2>/dev/null || echo "")
+          echo "current_run=$CURRENT_RUN"
+          # Probe vedur for the latest available run (try a recent 3h slot)
+          python3 -c "
+          import requests, datetime as dt, sys
+          now = dt.datetime.utcnow()
+          BASE = 'https://www.vedur.is/media/vedurstofan/vefkort/spar/harmonielysingar/harmonie_island_lcc/'
+          for back in range(0, 8):
+              t = now - dt.timedelta(hours=3*back)
+              run = t.strftime('%y%m%d') + '_' + t.strftime('%H').replace(t.strftime('%H'), '%02d' % (3*(t.hour//3))) + '00'
+              run = t.strftime('%y%m%d') + '_%02d00' % (3*(t.hour//3))
+              url = BASE + run + '_6.png'
+              try:
+                  r = requests.head(url, timeout=10)
+                  if r.status_code == 200:
+                      print(run)
+                      sys.exit(0)
+              except: pass
+          print('UNREACHABLE')
+          " > /tmp/latest_run.txt
+          LATEST_RUN=$(cat /tmp/latest_run.txt)
+          echo "latest_run=$LATEST_RUN"
+          if [ "$LATEST_RUN" = "UNREACHABLE" ]; then
+            echo "vedur.is unreachable — skipping extract"
+            echo "skip=true" >> $GITHUB_OUTPUT
+          elif [ "$LATEST_RUN" = "$CURRENT_RUN" ]; then
+            echo "No new run (still $CURRENT_RUN) — skipping extract"
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "New run available: $LATEST_RUN (was: $CURRENT_RUN)"
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Extract HARMONIE cloud grids
+        if: steps.probe.outputs.skip != 'true'
+        run: |
+          python harmonie/extract.py --out _site/harmonie_latest.json
           ls -lh _site
 
       - name: Extract wind/precip (thattaspa) grids
+        if: steps.probe.outputs.skip != 'true'
         continue-on-error: true
         run: |
-          python harmonie/extract_elements.py --out _site/elements_latest.json
+          python harmonie/extract_elements.py --out _site/elements_latest.json || true
           ls -lh _site
 
       - name: Extract Vedur station forecasts
+        if: steps.probe.outputs.skip != 'true'
         continue-on-error: true
         run: |
-          python harmonie/extract_stations.py --out _site/vedur_stations.json
+          python harmonie/extract_stations.py --out _site/vedur_stations.json || true
           ls -lh _site
 
-      # Copy the existing meteo_latest.json from the live site so it's preserved across
-      # deploys (this workflow doesn't regenerate it — the meteo workflow handles that).
-      - name: Preserve meteo_latest.json from current deploy
+      # Preserve data files from the live site when their extracts failed (vedur down etc.)
+      - name: Preserve stations + elements + meteo from current deploy
+        if: steps.probe.outputs.skip != 'true'
         continue-on-error: true
         run: |
-          curl -sf "https://avengingab1.github.io/iceland-sky-data/meteo_latest.json" -o _site/meteo_latest.json && ls -lh _site/meteo_latest.json || echo "no existing meteo_latest.json to preserve"
+          [ -f _site/vedur_stations.json ] || curl -sf "https://avengingab1.github.io/iceland-sky-data/vedur_stations.json" -o _site/vedur_stations.json && echo "preserved stations" || echo "no existing stations"
+          [ -f _site/elements_latest.json ] || curl -sf "https://avengingab1.github.io/iceland-sky-data/elements_latest.json" -o _site/elements_latest.json && echo "preserved elements" || echo "no existing elements"
+          curl -sf "https://avengingab1.github.io/iceland-sky-data/meteo_latest.json" -o _site/meteo_latest.json && echo "preserved meteo" || echo "no existing meteo"
+          ls -lh _site
 
       - uses: actions/upload-pages-artifact@v3
+        if: steps.probe.outputs.skip != 'true'
         with:
           path: _site
 
       - id: deployment
+        if: steps.probe.outputs.skip != 'true'
         uses: actions/deploy-pages@v4
