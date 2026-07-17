@@ -1,12 +1,12 @@
 name: HARMONIE cloud + wind/precip + stations data feed
 
 # Frequent low-latency feed: HARMONIE clouds (vedur 2.5 km), wind/precip (thattaspa),
-# and station forecasts. Runs every 30 min to catch vedur's 3h HARMONIE publications
-# within ~30 min of release. Fast (~2 min runtime), no rate-limit risk.
+# and station forecasts. Runs every hour to catch vedur's 3h HARMONIE publications
+# while avoiding excessive load on vedur.is (~24 hits/day instead of 48).
 
 on:
   schedule:
-    - cron: '0,30 * * * *'
+    - cron: '15 * * * *'
   workflow_dispatch:
 
 permissions:
@@ -51,6 +51,7 @@ jobs:
           ls -lh _site
 
       - name: Extract Vedur station forecasts
+        continue-on-error: true
         run: |
           python harmonie/extract_stations.py --out _site/vedur_stations.json
           ls -lh _site
