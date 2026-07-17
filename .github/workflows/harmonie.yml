@@ -67,7 +67,10 @@ jobs:
           " > /tmp/latest_run.txt
           LATEST_RUN=$(cat /tmp/latest_run.txt)
           echo "latest_run=$LATEST_RUN"
-          if [ "$LATEST_RUN" = "UNREACHABLE" ]; then
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "Manual trigger — force full extract"
+            echo "skip=false" >> $GITHUB_OUTPUT
+          elif [ "$LATEST_RUN" = "UNREACHABLE" ]; then
             echo "vedur.is unreachable — skipping extract"
             echo "skip=true" >> $GITHUB_OUTPUT
           elif [ "$LATEST_RUN" = "$CURRENT_RUN" ]; then
