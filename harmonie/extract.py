@@ -18,6 +18,7 @@ import datetime as dt
 import io
 import json
 import sys
+import time
 
 import numpy as np
 import requests
@@ -52,10 +53,20 @@ OUT = dict(lat0=62.9, lat1=67.0, lon0=-25.3, lon1=-12.7, step=0.05)
 
 def fetch_png(vfile: str, run: str, frame: int):
     url = '%sharmonie_island_%s/%s_%d.png' % (BASE, vfile, run, frame)
-    r = requests.get(url, timeout=45)
-    if r.status_code != 200:
-        return None
-    return np.array(Image.open(io.BytesIO(r.content)).convert('RGB'))
+    for attempt in range(4):
+        try:
+            r = requests.get(url, timeout=45)
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError):
+            if attempt < 3:
+                time.sleep(15)
+                continue
+            return None
+        if r.status_code in (500, 502, 503, 504) and attempt < 3:
+            time.sleep(15)
+            continue
+        if r.status_code != 200:
+            return None
+        return np.array(Image.open(io.BytesIO(r.content)).convert('RGB'))
 
 
 def latest_run(now: dt.datetime | None = None):

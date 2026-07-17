@@ -59,10 +59,20 @@ IMG_W, IMG_H = 640, 420
 
 def fetch_gif(prod, run, frame):
     url = '%s%s/%s_%03d.gif' % (BASE, prod, run, frame)
-    r = requests.get(url, timeout=45)
-    if r.status_code != 200:
-        return None
-    return np.array(Image.open(io.BytesIO(r.content)).convert('RGB'))
+    for attempt in range(4):
+        try:
+            r = requests.get(url, timeout=45)
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError):
+            if attempt < 3:
+                time.sleep(15)
+                continue
+            return None
+        if r.status_code in (500, 502, 503, 504) and attempt < 3:
+            time.sleep(15)
+            continue
+        if r.status_code != 200:
+            return None
+        return np.array(Image.open(io.BytesIO(r.content)).convert('RGB'))
 
 
 def latest_run(now=None):

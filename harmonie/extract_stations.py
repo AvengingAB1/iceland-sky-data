@@ -56,10 +56,26 @@ WTYPE = {
 _DATE_RE = re.compile(r"new Date\((\d+),(\d+)-1,(\d+),(\d+),(\d+)\)")
 
 
-def _get(url: str) -> str:
-    r = requests.get(url, headers={"User-Agent": UA}, timeout=40)
-    r.raise_for_status()
-    return r.text
+def _get(url: str, retries: int = 3) -> str:
+    for attempt in range(retries + 1):
+        try:
+            r = requests.get(url, headers={"User-Agent": UA}, timeout=40)
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+            if attempt < retries:
+                wait = 15
+                print(f"  {type(e).__name__}, retry in {wait}s...", flush=True)
+                import time; time.sleep(wait)
+                continue
+            raise
+        if r.status_code in (500, 502, 503, 504):
+            if attempt < retries:
+                wait = 15
+                print(f"  HTTP {r.status_code}, retry in {wait}s...", flush=True)
+                import time; time.sleep(wait)
+                continue
+        r.raise_for_status()
+        return r.text
+    return ""  # unreachable
 
 
 def _iso(y, mon, d, h, mi) -> str:
