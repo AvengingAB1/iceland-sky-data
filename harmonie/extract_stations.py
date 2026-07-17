@@ -32,10 +32,15 @@ import sys
 import requests
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) SunsetglowStationFetch/1.0"
-HOST = "https://en.vedur.is"
-AREAS = HOST + "/weather/forecasts/areas/"
-SERVLET = HOST + "/WeatherServlet?op_x=f4grp&grp={grp}&local=1"
-WSLINFO = HOST + "/wstations/wslinfo.js"
+# Primary: www.vedur.is (Icelandic site, reliable). Fallback: en.vedur.is (English, intermittent).
+HOST_PRIMARY = "https://www.vedur.is"
+HOST_FALLBACK = "https://en.vedur.is"
+AREAS_PRIMARY = HOST_PRIMARY + "/vedur/spar/stadaspar"
+AREAS_FALLBACK = HOST_FALLBACK + "/weather/forecasts/areas/"
+SERVLET_PRIMARY = HOST_PRIMARY + "/WeatherServlet?op_x=f4grp&grp={grp}&local=1"
+SERVLET_FALLBACK = HOST_FALLBACK + "/WeatherServlet?op_x=f4grp&grp={grp}&local=1"
+WSLINFO_PRIMARY = HOST_PRIMARY + "/wstations/wslinfo.js"
+WSLINFO_FALLBACK = HOST_FALLBACK + "/wstations/wslinfo.js"
 GRP_OVERVIEW = 56          # whole-country overview (~26 stations)
 GRP_ALL = 121              # every forecast station (hundreds)
 
@@ -76,6 +81,15 @@ def _get(url: str, retries: int = 3) -> str:
         r.raise_for_status()
         return r.text
     return ""  # unreachable
+
+
+def _get_with_fallback(primary: str, fallback: str) -> str:
+    """Try primary URL, fall back to alternate host on failure."""
+    try:
+        return _get(primary)
+    except Exception as e:
+        print(f"  Primary failed ({e}), trying fallback...", flush=True)
+        return _get(fallback)
 
 
 def _iso(y, mon, d, h, mi) -> str:
@@ -158,19 +172,25 @@ def parse_wslinfo(js: str):
 
 def build(out_path: str) -> int:
     print("fetching areas page (time axis)…")
-    times, interval, issued = parse_time_axis(_get(AREAS))
+    times, interval, issued = parse_time_axis(
+        _get_with_fallback(AREAS_PRIMARY, AREAS_FALLBACK))
     print(f"  {len(times)} time steps, issued {issued}")
 
     print("fetching station coords (wslinfo)…")
-    wsinfo = parse_wslinfo(_get(WSLINFO))
+    wsinfo = parse_wslinfo(
+        _get_with_fallback(WSLINFO_PRIMARY, WSLINFO_FALLBACK))
     print(f"  {len(wsinfo)} stations known")
 
     print("fetching overview group (56)…")
-    overview = parse_group(_get(SERVLET.format(grp=GRP_OVERVIEW)))
+    overview = parse_group(
+        _get_with_fallback(SERVLET_PRIMARY.format(grp=GRP_OVERVIEW),
+                           SERVLET_FALLBACK.format(grp=GRP_OVERVIEW)))
     print(f"  {len(overview)} overview stations")
 
     print("fetching all-stations group (121)…")
-    allst = parse_group(_get(SERVLET.format(grp=GRP_ALL)))
+    allst = parse_group(
+        _get_with_fallback(SERVLET_PRIMARY.format(grp=GRP_ALL),
+                           SERVLET_FALLBACK.format(grp=GRP_ALL)))
     print(f"  {len(allst)} total stations")
 
     # Union (all ⊇ overview); attach coords; tag overview tier.
