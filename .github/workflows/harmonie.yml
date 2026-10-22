@@ -87,6 +87,15 @@ jobs:
           python harmonie/extract.py --out _site/harmonie_latest.json
           ls -lh _site
 
+      # Keep the last ~30 h of PAST hours (newest run per hour) that the new run no longer
+      # covers, so a late Fetch still gets e.g. this evening's 15Z/18Z data, not a days-old run.
+      - name: Carry recent past hours forward
+        if: steps.probe.outputs.skip != 'true'
+        continue-on-error: true
+        run: |
+          python harmonie/carry_forward.py --new _site/harmonie_latest.json --prev-url "https://avengingab1.github.io/iceland-sky-data/harmonie_latest.json" --hours 30
+          ls -lh _site
+
       - name: Extract wind/precip (thattaspa) grids
         if: steps.probe.outputs.skip != 'true'
         continue-on-error: true
