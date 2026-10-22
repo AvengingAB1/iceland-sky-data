@@ -50,8 +50,15 @@ def grid_coords(step: float):
     return lats, lons
 
 
-def fetch_chunk(lats: list, lons: list, start: str, end: str, retries: int = 3) -> list:
-    """Fetch one chunk of ≤150 locations from Open-Meteo. Returns list of point dicts."""
+SESSION = requests.Session()
+# On GitHub runners a request occasionally hangs with no reply while an immediate retry
+# answers in ~1 s (a healthy 75-point 14-day chunk takes ~1.5 s), so give up quickly and
+# retry rather than sitting out a long read timeout. (connect, read) seconds.
+TIMEOUT = (15, 45)
+
+
+def fetch_chunk(lats: list, lons: list, start: str, end: str, retries: int = 6) -> list:
+    """Fetch one chunk of locations from Open-Meteo. Returns list of point dicts."""
     params = {
         "latitude": ",".join(f"{x:.4f}" for x in lats),
         "longitude": ",".join(f"{x:.4f}" for x in lons),
@@ -62,11 +69,11 @@ def fetch_chunk(lats: list, lons: list, start: str, end: str, retries: int = 3) 
     }
     for attempt in range(retries + 1):
         try:
-            resp = requests.get(API, params=params, timeout=120)
+            resp = SESSION.get(API, params=params, timeout=TIMEOUT)
         except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
             if attempt < retries:
-                wait = 30
-                print(f" timeout/connection error, retry in {wait}s...", end="", flush=True)
+                wait = 5 if attempt < 2 else 30
+                print(f" {type(e).__name__}, retry in {wait}s...", end="", flush=True)
                 time.sleep(wait)
                 continue
             raise RuntimeError(f"Open-Meteo request failed after {retries} retries: {e}")
