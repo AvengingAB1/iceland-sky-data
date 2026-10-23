@@ -57,8 +57,17 @@ SESSION = requests.Session()
 TIMEOUT = (15, 45)
 
 
+class _Retry(Exception):
+    """A reply we should simply ask for again (rate limit, server error, broken body)."""
+
+
 def fetch_chunk(lats: list, lons: list, start: str, end: str, retries: int = 6) -> list:
-    """Fetch one chunk of locations from Open-Meteo. Returns list of point dicts."""
+    """Fetch one chunk of locations from Open-Meteo. Returns list of point dicts.
+
+    Everything transient is retried: timeouts/stalls, dropped connections, 429, 5xx, and
+    replies that arrive as "200 OK" but with an empty or truncated JSON body (seen on GitHub
+    runners; this used to crash the whole run). A reply is only accepted when it has exactly
+    one entry per requested point with the full hour range for every variable."""
     params = {
         "latitude": ",".join(f"{x:.4f}" for x in lats),
         "longitude": ",".join(f"{x:.4f}" for x in lons),
@@ -67,47 +76,47 @@ def fetch_chunk(lats: list, lons: list, start: str, end: str, retries: int = 6) 
         "start_date": start,
         "end_date": end,
     }
+    exp_hours = ((dt.date.fromisoformat(end) - dt.date.fromisoformat(start)).days + 1) * 24
+    keys = HOURLY.split(",")
+    last = None
     for attempt in range(retries + 1):
+        wait = 5 if attempt < 2 else 30
         try:
             resp = SESSION.get(API, params=params, timeout=TIMEOUT)
-        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
-            if attempt < retries:
-                wait = 5 if attempt < 2 else 30
-                print(f" {type(e).__name__}, retry in {wait}s...", end="", flush=True)
-                time.sleep(wait)
-                continue
-            raise RuntimeError(f"Open-Meteo request failed after {retries} retries: {e}")
-        if resp.status_code == 429:
-            if attempt < retries:
+            if resp.status_code == 429:
                 wait = 65  # wait >1 minute for the per-minute window to reset
-                print(f" 429 (rate limit), waiting {wait}s...", end="", flush=True)
-                time.sleep(wait)
-                continue
-            raise RuntimeError("Open-Meteo 429 rate limit hit after retries — try later.")
-        if resp.status_code in (500, 502, 503, 504):
-            if attempt < retries:
-                wait = 30
-                print(f" {resp.status_code} server error, retry in {wait}s...", end="", flush=True)
-                time.sleep(wait)
-                continue
-        resp.raise_for_status()
-        break
-    data = resp.json()
-    if not isinstance(data, list):
-        data = [data]
-    points = []
-    for it in data:
-        h = it.get("hourly", {})
-        points.append({
+                raise _Retry("429 rate limit")
+            if resp.status_code >= 500:
+                raise _Retry(f"{resp.status_code} server error")
+            resp.raise_for_status()          # other 4xx = a bad request: retrying won't help
+            data = resp.json()               # ValueError if the body is empty/truncated
+            if not isinstance(data, list):
+                data = [data]
+            if len(data) != len(lats):
+                raise _Retry(f"incomplete reply: {len(data)}/{len(lats)} points")
+            for it in data:
+                h = it.get("hourly") or {}
+                if len(h.get("time", [])) != exp_hours or any(len(h.get(k) or []) != exp_hours for k in keys):
+                    raise _Retry(f"incomplete reply: {len(h.get('time', []))}/{exp_hours} hours")
+        except requests.exceptions.HTTPError:
+            raise
+        except (requests.exceptions.RequestException, ValueError, _Retry) as e:
+            last = e
+            if attempt == retries:
+                break
+            print(f" {type(e).__name__}: {str(e)[:60]}; retry in {wait}s...", end="", flush=True)
+            time.sleep(wait)
+            continue
+        return [{
             "lat": it["latitude"],
             "lon": it["longitude"],
-            "time": h.get("time", []),
-            "low": h.get("cloud_cover_low", []),
-            "mid": h.get("cloud_cover_mid", []),
-            "high": h.get("cloud_cover_high", []),
-            "visibility": h.get("visibility", []),
-        })
-    return points
+            "time": it["hourly"]["time"],
+            "low": it["hourly"]["cloud_cover_low"],
+            "mid": it["hourly"]["cloud_cover_mid"],
+            "high": it["hourly"]["cloud_cover_high"],
+            "visibility": it["hourly"]["visibility"],
+        } for it in data]
+    raise RuntimeError(f"Open-Meteo chunk failed after {retries} retries: {last}")
 
 
 def main():
