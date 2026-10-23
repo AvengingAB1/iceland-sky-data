@@ -89,7 +89,7 @@ jobs:
       - name: Preserve the other feed files from the current deploy
         if: steps.fresh.outputs.skip != 'true'
         run: |
-          for f in harmonie_latest.json dmi_latest.json elements_latest.json vedur_stations.json meteo_latest.json ecmwf_latest.json ecmwf_elements_latest.json; do
+          for f in harmonie_latest.json dmi_latest.json elements_latest.json vedur_stations.json stations_peaks.json stations_grid.json meteo_latest.json ecmwf_latest.json ecmwf_elements_latest.json; do
             if [ ! -f "_site/$f" ]; then
               curl -sf "$SITE/$f" -o "_site/$f.tmp" && mv "_site/$f.tmp" "_site/$f" && echo "preserved $f" || { rm -f "_site/$f.tmp"; echo "no existing $f"; }
             fi
