@@ -26,6 +26,7 @@ import urllib.request
 
 GEOM = ('lat0', 'lat1', 'lon0', 'lon1', 'nlat', 'nlon', 'nodata')
 LAYERS = ('low', 'mid', 'high')
+OPTIONAL = ('vis',)          # per-frame optional layers (MEPS visibility); null frame = not available
 
 
 def parse_t(s):
@@ -66,6 +67,10 @@ def main(argv):
                 pf = prev.get('frames') or [None] * len(prev['times'])
                 for k in LAYERS:
                     new[k] = [prev[k][i] for i in idx] + new[k]
+                for k in OPTIONAL:
+                    if k in new:
+                        pk = prev.get(k) if isinstance(prev.get(k), list) and len(prev[k]) == len(prev['times']) else None
+                        new[k] = [(pk[i] if pk else None) for i in idx] + new[k]
                 new['times'] = [prev['times'][i] for i in idx] + new['times']
                 new['frame_runs'] = [pruns[i] for i in idx] + new['frame_runs']
                 if 'frames' in new:
