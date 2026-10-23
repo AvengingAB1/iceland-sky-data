@@ -338,11 +338,13 @@ def main(argv):
         print('run %s already published; nothing to do' % a.skip_if_run)
         return 3
     grid, elements = build(a.region, run, prefix, files)
+    import os
     for path, obj in ((a.out, grid), (a.elements_out, elements)):
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
         tmp = path + '.tmp'
         with open(tmp, 'w', encoding='utf-8') as f:
             json.dump(obj, f, separators=(',', ':'))
-        import os, gzip
+        import gzip
         os.replace(tmp, path)
         raw = open(path, 'rb').read()
         print('wrote %s: %.1f MB (gzip %.1f MB)' % (path, len(raw) / 1e6, len(gzip.compress(raw, 6)) / 1e6))
