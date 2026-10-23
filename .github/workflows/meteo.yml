@@ -16,6 +16,10 @@ on:
         description: 'Run even if the published grid is less than 5 h old (uses API calls)'
         type: boolean
         default: false
+      only_ecmwf:
+        description: 'Only refresh the ECMWF 9 km files (no Open-Meteo API calls)'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -40,7 +44,7 @@ jobs:
       - name: Skip if the published grid is still fresh (saves API calls)
         id: fresh
         env:
-          FORCE: ${{ inputs.force }}
+          FORCE: ${{ inputs.force || inputs.only_ecmwf }}
         run: |
           if [ "$FORCE" = "true" ]; then echo "skip=false" >> "$GITHUB_OUTPUT"; echo "forced run"; exit 0; fi
           AGE_H=$(curl -sf "$SITE/meteo_latest.json" | python3 -c "import sys,json,datetime as d; g=json.load(sys.stdin)['generated']; t=d.datetime.strptime(g[:16],'%Y-%m-%dT%H:%M').replace(tzinfo=d.timezone.utc); print(int((d.datetime.now(d.timezone.utc)-t).total_seconds()//3600))" 2>/dev/null || echo 999)
@@ -59,21 +63,36 @@ jobs:
         if: steps.fresh.outputs.skip != 'true'
         run: pip install requests
 
+      # Non-fatal: a failure keeps the published meteo_latest.json and ECMWF still publishes.
       - name: Extract Open-Meteo cloud + fog grid
-        if: steps.fresh.outputs.skip != 'true'
+        if: steps.fresh.outputs.skip != 'true' && inputs.only_ecmwf != true
+        continue-on-error: true
         run: |
           mkdir -p _site
           python harmonie/extract_meteo.py --out _site/meteo_latest.json
           touch _site/.nojekyll
           ls -lh _site
 
-      # Preserve the other data files from the live site so this deploy doesn't wipe them.
-      - name: Preserve HARMONIE + stations + elements from current deploy
+      # ECMWF IFS 9 km long range (clouds, visibility, wind, precip to +15 days) from Open-Meteo's
+      # open S3 bucket: no API calls. Optional: a failure keeps the published ECMWF files.
+      - name: Extract ECMWF 9 km long-range grid + wind/precip overlays
+        if: steps.fresh.outputs.skip != 'true'
+        continue-on-error: true
+        run: |
+          pip install omfiles fsspec s3fs numpy scipy Pillow
+          (cd harmonie && python extract_ecmwf.py --region iceland --out ../_site/ecmwf_latest.json --elements-out ../_site/ecmwf_elements_latest.json)
+          ls -lh _site
+
+      # Every deploy replaces the whole site: copy every feed file this run did not produce
+      # from the live site (single list for all workflows of this repo).
+      - name: Preserve the other feed files from the current deploy
         if: steps.fresh.outputs.skip != 'true'
         run: |
-          curl -sf "https://avengingab1.github.io/iceland-sky-data/harmonie_latest.json" -o _site/harmonie_latest.json || true
-          curl -sf "https://avengingab1.github.io/iceland-sky-data/elements_latest.json" -o _site/elements_latest.json || true
-          curl -sf "https://avengingab1.github.io/iceland-sky-data/vedur_stations.json" -o _site/vedur_stations.json || true
+          for f in harmonie_latest.json dmi_latest.json elements_latest.json vedur_stations.json meteo_latest.json ecmwf_latest.json ecmwf_elements_latest.json; do
+            if [ ! -f "_site/$f" ]; then
+              curl -sf "$SITE/$f" -o "_site/$f.tmp" && mv "_site/$f.tmp" "_site/$f" && echo "preserved $f" || { rm -f "_site/$f.tmp"; echo "no existing $f"; }
+            fi
+          done
           ls -lh _site
 
       - uses: actions/upload-pages-artifact@v3
