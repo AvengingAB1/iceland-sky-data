@@ -60,7 +60,7 @@ jobs:
           python3 -c "
           import requests, datetime as dt, sys
           now = dt.datetime.utcnow()
-          BASE = 'https://www.vedur.is/media/vedurstofan/vefkort/spar/harmonielysingar/harmonie_island_lcc/'
+          BASE = 'https://en.vedur.is/photos/harmonie_island_lcc/'   # same source as harmonie/extract.py
           for back in range(0, 8):
               t = now - dt.timedelta(hours=3*back)
               run = t.strftime('%y%m%d') + '_%02d00' % (3*(t.hour//3))
