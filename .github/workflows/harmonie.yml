@@ -1,13 +1,21 @@
 name: HARMONIE cloud + wind/precip + stations data feed
 
-# Frequent low-latency feed: HARMONIE clouds (vedur 2.5 km), wind/precip (thattaspa),
-# and station forecasts. Runs every hour; a lightweight probe checks if vedur has
-# published a new HARMONIE run — if not, exits without fetching or deploying.
+# Frequent low-latency feed for Iceland, every 3-hourly model run:
+#   * dmi_latest.json      DMI HARMONIE IG 2 km, numeric cloud layers + visibility (preferred)
+#   * harmonie_latest.json vedur images of the same model (automatic backup in the app)
+#   * elements_latest.json vedur wind/precip, vedur_stations.json station forecasts
+# Probes first: vedur and DMI are each extracted only when they have a run newer than the one
+# published, so the 30-min Worker dispatches cost seconds when nothing changed. `force` re-extracts.
 
 on:
   schedule:
     - cron: '20 * * * *'
   workflow_dispatch:
+    inputs:
+      force:
+        description: 'Re-extract vedur + DMI even if their newest runs are already published'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -20,10 +28,12 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+  SITE: https://avengingab1.github.io/iceland-sky-data
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -37,49 +47,72 @@ jobs:
       - name: Install dependencies
         run: pip install -r harmonie/requirements.txt
 
-      # Lightweight probe: check if vedur.is is reachable and has a newer HARMONIE run
-      # than what we already published. If not, skip the full extract entirely.
+      # Lightweight probe: is vedur.is reachable and does it have a newer HARMONIE run?
       - name: Probe vedur.is for new data
         id: probe
+        env:
+          FORCE: ${{ inputs.force }}
         run: |
           mkdir -p _site
           touch _site/.nojekyll
-          # Get the run ID from our current published data (if any)
-          CURRENT_RUN=$(curl -sf "https://avengingab1.github.io/iceland-sky-data/harmonie_latest.json" | python3 -c "import sys,json; print(json.load(sys.stdin).get('run',''))" 2>/dev/null || echo "")
+          CURRENT_RUN=$(curl -sf "$SITE/harmonie_latest.json" | python3 -c "import sys,json; print(json.load(sys.stdin).get('run',''))" 2>/dev/null || echo "")
           echo "current_run=$CURRENT_RUN"
-          # Probe vedur for the latest available run (try a recent 3h slot)
           python3 -c "
           import requests, datetime as dt, sys
           now = dt.datetime.utcnow()
           BASE = 'https://www.vedur.is/media/vedurstofan/vefkort/spar/harmonielysingar/harmonie_island_lcc/'
           for back in range(0, 8):
               t = now - dt.timedelta(hours=3*back)
-              run = t.strftime('%y%m%d') + '_' + t.strftime('%H').replace(t.strftime('%H'), '%02d' % (3*(t.hour//3))) + '00'
               run = t.strftime('%y%m%d') + '_%02d00' % (3*(t.hour//3))
-              url = BASE + run + '_6.png'
               try:
-                  r = requests.head(url, timeout=10)
+                  r = requests.head(BASE + run + '_6.png', timeout=10)
                   if r.status_code == 200:
                       print(run)
                       sys.exit(0)
-              except: pass
+              except Exception: pass
           print('UNREACHABLE')
           " > /tmp/latest_run.txt
           LATEST_RUN=$(cat /tmp/latest_run.txt)
           echo "latest_run=$LATEST_RUN"
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "Manual trigger — force full extract"
+          if [ "$FORCE" = "true" ]; then
+            echo "Forced — full vedur extract"
             echo "skip=false" >> $GITHUB_OUTPUT
           elif [ "$LATEST_RUN" = "UNREACHABLE" ]; then
-            echo "vedur.is unreachable — skipping extract"
+            echo "vedur.is unreachable — skipping vedur extract"
             echo "skip=true" >> $GITHUB_OUTPUT
           elif [ "$LATEST_RUN" = "$CURRENT_RUN" ]; then
-            echo "No new run (still $CURRENT_RUN) — skipping extract"
+            echo "No new vedur run (still $CURRENT_RUN)"
             echo "skip=true" >> $GITHUB_OUTPUT
           else
-            echo "New run available: $LATEST_RUN (was: $CURRENT_RUN)"
+            echo "New vedur run: $LATEST_RUN (was: $CURRENT_RUN)"
             echo "skip=false" >> $GITHUB_OUTPUT
           fi
+
+      # DMI numeric HARMONIE IG: probe + extract in one step (exit 3 = newest complete run is
+      # already published, 4 = DMI unreachable). Never fails the job: vedur still publishes.
+      - name: Extract DMI HARMONIE IG (numeric clouds + visibility)
+        id: dmi
+        continue-on-error: true
+        env:
+          FORCE: ${{ inputs.force }}
+        run: |
+          CURRENT=$(curl -sf "$SITE/dmi_latest.json" | python3 -c "import sys,json; print(json.load(sys.stdin).get('run',''))" 2>/dev/null || echo "")
+          echo "published DMI run: '$CURRENT'"
+          SKIP_ARG=""
+          if [ "$FORCE" != "true" ] && [ -n "$CURRENT" ]; then SKIP_ARG="--skip-if-run $CURRENT"; fi
+          set +e
+          python harmonie/extract_dmi_ig.py --out _site/dmi_latest.json $SKIP_ARG
+          rc=$?
+          set -e
+          if [ $rc -eq 0 ]; then echo "new=true" >> $GITHUB_OUTPUT; else echo "new=false" >> $GITHUB_OUTPUT; rm -f _site/dmi_latest.json; fi
+          if [ $rc -eq 4 ]; then echo "::warning::DMI open data unreachable - kept the published DMI run"; fi
+          if [ $rc -ne 0 ] && [ $rc -ne 3 ] && [ $rc -ne 4 ]; then echo "::warning::DMI extract failed (rc=$rc) - kept the published DMI run"; fi
+          exit 0
+
+      - name: Carry recent past hours forward (DMI)
+        if: steps.dmi.outputs.new == 'true'
+        continue-on-error: true
+        run: python harmonie/carry_forward.py --new _site/dmi_latest.json --prev-url "$SITE/dmi_latest.json" --hours 30
 
       - name: Extract HARMONIE cloud grids
         if: steps.probe.outputs.skip != 'true'
@@ -93,7 +126,7 @@ jobs:
         if: steps.probe.outputs.skip != 'true'
         continue-on-error: true
         run: |
-          python harmonie/carry_forward.py --new _site/harmonie_latest.json --prev-url "https://avengingab1.github.io/iceland-sky-data/harmonie_latest.json" --hours 30
+          python harmonie/carry_forward.py --new _site/harmonie_latest.json --prev-url "$SITE/harmonie_latest.json" --hours 30
           ls -lh _site
 
       - name: Extract wind/precip (thattaspa) grids
@@ -110,23 +143,34 @@ jobs:
           python harmonie/extract_stations.py --out _site/vedur_stations.json || true
           ls -lh _site
 
-      # Preserve data files from the live site when their extracts failed (vedur down etc.)
-      - name: Preserve stations + elements + meteo from current deploy
-        if: steps.probe.outputs.skip != 'true'
-        continue-on-error: true
+      - name: Decide whether to publish
+        id: pub
         run: |
-          [ -f _site/vedur_stations.json ] || curl -sf "https://avengingab1.github.io/iceland-sky-data/vedur_stations.json" -o _site/vedur_stations.json && echo "preserved stations" || echo "no existing stations"
-          [ -f _site/elements_latest.json ] || curl -sf "https://avengingab1.github.io/iceland-sky-data/elements_latest.json" -o _site/elements_latest.json && echo "preserved elements" || echo "no existing elements"
-          curl -sf "https://avengingab1.github.io/iceland-sky-data/meteo_latest.json" -o _site/meteo_latest.json && echo "preserved meteo" || echo "no existing meteo"
+          if [ "${{ steps.probe.outputs.skip }}" != "true" ] || [ "${{ steps.dmi.outputs.new }}" = "true" ]; then
+            echo "deploy=true" >> $GITHUB_OUTPUT
+          else
+            echo "deploy=false" >> $GITHUB_OUTPUT; echo "Nothing new from vedur or DMI"
+          fi
+
+      # Every deploy replaces the whole site: copy every feed file this run did not produce
+      # from the live site (single list for all workflows of this repo).
+      - name: Preserve the other feed files from the current deploy
+        if: steps.pub.outputs.deploy == 'true'
+        run: |
+          for f in harmonie_latest.json dmi_latest.json elements_latest.json vedur_stations.json meteo_latest.json ecmwf_latest.json ecmwf_elements_latest.json; do
+            if [ ! -f "_site/$f" ]; then
+              curl -sf "$SITE/$f" -o "_site/$f.tmp" && mv "_site/$f.tmp" "_site/$f" && echo "preserved $f" || { rm -f "_site/$f.tmp"; echo "no existing $f"; }
+            fi
+          done
           ls -lh _site
 
       - uses: actions/upload-pages-artifact@v3
-        if: steps.probe.outputs.skip != 'true'
+        if: steps.pub.outputs.deploy == 'true'
         with:
           path: _site
 
       - id: deployment
-        if: steps.probe.outputs.skip != 'true'
+        if: steps.pub.outputs.deploy == 'true'
         continue-on-error: true
         uses: actions/deploy-pages@v4
 
