@@ -143,6 +143,13 @@ jobs:
           python harmonie/extract_stations.py --out _site/vedur_stations.json || true
           ls -lh _site
 
+      # MET Locationforecast weather points for the app's "Towns & Peaks" / "Grid (max)" levels:
+      # 163 peaks (summit altitude + summit fog = in cloud) and a 12 km land grid (774).
+      - name: MET peaks + grid weather points
+        if: steps.probe.outputs.skip != 'true'
+        continue-on-error: true
+        run: python harmonie/extract_stations_metno.py --region iceland --tiers peaks,grid --out _site/stations.json
+
       - name: Decide whether to publish
         id: pub
         run: |
@@ -157,7 +164,7 @@ jobs:
       - name: Preserve the other feed files from the current deploy
         if: steps.pub.outputs.deploy == 'true'
         run: |
-          for f in harmonie_latest.json dmi_latest.json elements_latest.json vedur_stations.json meteo_latest.json ecmwf_latest.json ecmwf_elements_latest.json; do
+          for f in harmonie_latest.json dmi_latest.json elements_latest.json vedur_stations.json stations_peaks.json stations_grid.json meteo_latest.json ecmwf_latest.json ecmwf_elements_latest.json; do
             if [ ! -f "_site/$f" ]; then
               curl -sf "$SITE/$f" -o "_site/$f.tmp" && mv "_site/$f.tmp" "_site/$f" && echo "preserved $f" || { rm -f "_site/$f.tmp"; echo "no existing $f"; }
             fi
