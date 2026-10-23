@@ -1,13 +1,21 @@
 name: Open-Meteo cloud + fog grid (14-day, 22km)
 
-# Separate from the fast HARMONIE workflow. Runs every 6h (matching Open-Meteo model
-# update cadence). Takes ~12 min due to paced API requests. Own concurrency group so
-# the frequent HARMONIE deploys can't cancel it.
+# Separate from the fast HARMONIE workflow. Runs twice a day, ~20 min after ECMWF IFS's 00Z/12Z
+# runs reach Open-Meteo (~6.2 h after init; best_match here IS ecmwf_ifs from day 3, and only the
+# 00Z/12Z runs reach 15 days). 2 x 2304 points = 4608 calls/day; Norway runs an hour later so the
+# two feeds together stay under Open-Meteo's free limits (10000/day, 5000/hour). A run skips itself
+# (no API calls) if the published grid is < 5 h old, so an extra trigger can't double-spend.
+# Takes ~11 min (paced requests). Own concurrency group so HARMONIE deploys can't cancel it.
 
 on:
   schedule:
-    - cron: '10 0,6,12,18 * * *'
+    - cron: '30 6,18 * * *'
   workflow_dispatch:
+    inputs:
+      force:
+        description: 'Run even if the published grid is less than 5 h old (uses API calls)'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -20,6 +28,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+  SITE: https://avengingab1.github.io/iceland-sky-data
 
 jobs:
   extract-meteo:
@@ -28,16 +37,30 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      - name: Skip if the published grid is still fresh (saves API calls)
+        id: fresh
+        env:
+          FORCE: ${{ inputs.force }}
+        run: |
+          if [ "$FORCE" = "true" ]; then echo "skip=false" >> "$GITHUB_OUTPUT"; echo "forced run"; exit 0; fi
+          AGE_H=$(curl -sf "$SITE/meteo_latest.json" | python3 -c "import sys,json,datetime as d; g=json.load(sys.stdin)['generated']; t=d.datetime.strptime(g[:16],'%Y-%m-%dT%H:%M').replace(tzinfo=d.timezone.utc); print(int((d.datetime.now(d.timezone.utc)-t).total_seconds()//3600))" 2>/dev/null || echo 999)
+          echo "published grid age: ${AGE_H} h"
+          if [ "$AGE_H" -lt 5 ]; then echo "skip=true" >> "$GITHUB_OUTPUT"; echo "still fresh: skipping (no API calls)"; else echo "skip=false" >> "$GITHUB_OUTPUT"; fi
+
       - uses: actions/checkout@v5
+        if: steps.fresh.outputs.skip != 'true'
 
       - uses: actions/setup-python@v6
+        if: steps.fresh.outputs.skip != 'true'
         with:
           python-version: '3.11'
 
       - name: Install dependencies
+        if: steps.fresh.outputs.skip != 'true'
         run: pip install requests
 
       - name: Extract Open-Meteo cloud + fog grid
+        if: steps.fresh.outputs.skip != 'true'
         run: |
           mkdir -p _site
           python harmonie/extract_meteo.py --out _site/meteo_latest.json
@@ -46,6 +69,7 @@ jobs:
 
       # Preserve the other data files from the live site so this deploy doesn't wipe them.
       - name: Preserve HARMONIE + stations + elements from current deploy
+        if: steps.fresh.outputs.skip != 'true'
         run: |
           curl -sf "https://avengingab1.github.io/iceland-sky-data/harmonie_latest.json" -o _site/harmonie_latest.json || true
           curl -sf "https://avengingab1.github.io/iceland-sky-data/elements_latest.json" -o _site/elements_latest.json || true
@@ -53,10 +77,12 @@ jobs:
           ls -lh _site
 
       - uses: actions/upload-pages-artifact@v3
+        if: steps.fresh.outputs.skip != 'true'
         with:
           path: _site
 
       - id: deployment
+        if: steps.fresh.outputs.skip != 'true'
         continue-on-error: true
         uses: actions/deploy-pages@v4
 
