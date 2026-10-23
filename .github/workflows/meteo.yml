@@ -57,4 +57,16 @@ jobs:
           path: _site
 
       - id: deployment
+        continue-on-error: true
+        uses: actions/deploy-pages@v4
+
+      # GitHub's Pages API occasionally fails transiently ("Fetching artifact metadata failed",
+      # "Failed to create deployment (status: 500)") although the artifact is fine. Retry once
+      # after a minute instead of failing the run; the job only fails if the retry fails too.
+      - name: Wait before retrying a failed Pages deploy
+        if: steps.deployment.outcome == 'failure'
+        run: sleep 60
+
+      - id: deployment_retry
+        if: steps.deployment.outcome == 'failure'
         uses: actions/deploy-pages@v4
