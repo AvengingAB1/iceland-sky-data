@@ -80,6 +80,7 @@ jobs:
         continue-on-error: true
         run: |
           pip install omfiles fsspec s3fs numpy scipy Pillow
+          mkdir -p _site
           (cd harmonie && python extract_ecmwf.py --region iceland --out ../_site/ecmwf_latest.json --elements-out ../_site/ecmwf_elements_latest.json)
           ls -lh _site
 
