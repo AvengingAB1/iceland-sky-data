@@ -22,9 +22,11 @@ permissions:
   pages: write
   id-token: write
 
+# Queue, don't cancel: a run with a new vedur/DMI run takes ~6-7 min and must not be killed by the
+# 30-min Worker dispatch; runs with nothing new finish in ~30 s, so queuing costs nothing.
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
