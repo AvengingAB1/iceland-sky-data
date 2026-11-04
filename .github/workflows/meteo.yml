@@ -22,7 +22,7 @@ on:
         default: false
 
 permissions:
-  contents: read
+  contents: write      # archive releases (verification); Pages deploy unchanged
   pages: write
   id-token: write
 
@@ -86,6 +86,23 @@ jobs:
 
       # Every deploy replaces the whole site: copy every feed file this run did not produce
       # from the live site (single list for all workflows of this repo).
+      # Verification archive: every NEW forecast file of this run, gzipped, into release archive-YYYYMMDD of this repo
+      # (the photoreal is re-rendered from these for webcam comparison). Never blocks the feed.
+      - name: Archive new forecast files (verification)
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          TAG=archive-$(date -u +%Y%m%d)
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "$TAG" --prerelease --notes "Forecast feed archive: each new run (gzip), for forecast verification." || true
+          for f in meteo_latest.json ecmwf_latest.json; do
+            [ -f "_site/$f" ] || continue
+            RUN=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('run') or 'norun')" "_site/$f" 2>/dev/null || echo norun)
+            OUT="/tmp/${f%.json}_${RUN}_$(date -u +%H%M).json.gz"
+            gzip -c "_site/$f" > "$OUT" && gh release upload "$TAG" "$OUT" --clobber && echo "archived $(basename $OUT)"
+          done
+
       - name: Preserve the other feed files from the current deploy
         if: steps.fresh.outputs.skip != 'true'
         run: |
